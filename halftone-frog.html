@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Halftone Frog - Lily Hop (60fps)</title>
+<style>
+  body { background:#111; display:flex; flex-direction:column; align-items:center; margin:0; padding:20px; color:#888; font:12px monospace; }
+  canvas { border:1px solid #333; background:#f2ede0; will-change:transform; }
+  #fps { margin-top:8px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="540" height="540"></canvas>
+<div id="fps">-- fps</div>
+<script>
+const cvs = document.getElementById('c');
+const ctx = cvs.getContext('2d');
+const W = 540, H = 540;
+const HORIZON = 332;
+const LOOP = 20; // day 0-8, dusk 8-12, night 12-18, return 18-20
+const fpsEl = document.getElementById('fps');
+
+function rand(i){ let v = Math.sin(i*127.1+311.7)*43758.5453; return v-Math.floor(v); }
+function noise1(x){ return Math.sin(x*1.7)*0.5 + Math.sin(x*2.9+1.3)*0.3 + Math.sin(x*5.1+4.1)*0.2; }
+function gust(t){
+  let slow = 0.5 + 0.5*Math.sin(t*0.39 + Math.sin(t*0.13)*1.2);
+  return slow*slow*(3-2*slow);
+}
+function ss(a,b,x){ let k=Math.min(1,Math.max(0,(x-a)/(b-a))); return k*k*(3-2*k); }
+function clamp01(x){ return Math.min(1,Math.max(0,x)); }
+function lerp(a,b,k){ return a+(b-a)*k; }
+function mixc(c1,c2,k){ return [lerp(c1[0],c2[0],k)|0, lerp(c1[1],c2[1],k)|0, lerp(c1[2],c2[2],k)|0]; }
+function css(c,a){ return a===undefined? `rgb(${c[0]},${c[1]},${c[2]})` : `rgba(${c[0]},${c[1]},${c[2]},${a})`; }
+
+// ---------- FROG CHOREOGRAPHY (3s moment at dusk) ----------
+const FROG = {
+  pad: { bx: 150, by: H - 64, w: 30, ph: 1.2, notch: 0.7 },
+  splashDx: 78, splashDy: 22,
+  ant0: 8.6, take: 9.0, land: 9.95, ripEnd: 12.5, back0: 18.3, back1: 19.6
+};
+const DROPS=[];
+for(let i=0;i<6;i++){
+  DROPS.push({ vx:-30+rand(i+3000)*70, vy:-95+rand(i+3100)*55, r:1.5+rand(i+3200)*1.2 });
+}
+
+// generic dots into any context (used once for statics, not per-frame)
+function dotsTo(g,x,y,w,h,gap,color,radiusFn){
+  g.fillStyle = color;
+  let row=0;
+  for(let yy=y; yy<y+h; yy+=gap){
+    row++;
+    for(let xx=x; xx<x+w; xx+=gap){
+      let ox = (row%2===0)? gap/2:0;
+      let r = radiusFn(xx,yy);
+      if(r<=0.15) continue;
+      g.beginPath(); g.arc(xx+ox,yy,r,0,7); g.fill();
+    }
+  }
+}
+function dotsInTo(g,shapeFn,bounds,gap,color,radiusFn){
+  g.save(); shapeFn(g); g.clip();
+  dotsTo(g,bounds[0],bounds[1],bounds[2],bounds[3],gap,color,radiusFn);
+  g.restore();
+}
+
+function ridgeY(x, base, a1,a2, p1,p2){
+  return base + Math.sin(x*a1+p1)*14 + Math.sin(x*a2+p2)*7 + noise1(x*0.02+p1)*6;
+}
+function hillTopX(x){ return 310 + Math.sin(x*0.02+0.8)*6 + noise1(x*0.03)*5; }
+function waveY(x,t){ return Math.sin(x*0.045 + t*1.1)*3 + Math.sin(x*0.11 - t*0.7)*1.6; }
+
+function mountainShape(g,base,a1,a2,p1,p2){
+  g.beginPath();
+  g.moveTo(-20,HORIZON+2);
+  for(let x=-20;x<=W+20;x+=12) g.lineTo(x, ridgeY(x,base,a1,a2,p1,p2));
+  g.lineTo(W+20,HORIZON+2); g.closePath();
+}
+function hillShape(g){
+  g.beginPath(); g.moveTo(-20,HORIZON+2);
+  for(let x=-20;x<=W+20;x+=10) g.lineTo(x,hillTopX(x));
+  g.lineTo(W+20,HORIZON+2); g.closePath();
+}
+
+const SUN_X=420, SUN_Y=88, SUN_R=50;
+
+// ---------- DAY BG ----------
+const bgCanvas = document.createElement('canvas');
+bgCanvas.width=W; bgCanvas.height=H;
+(function buildBG(){
+  const g = bgCanvas.getContext('2d');
+  g.fillStyle='#f0ebdd'; g.fillRect(0,0,W,HORIZON+2);
+  dotsTo(g,0,0,W,HORIZON,9,'#2a5a8a',(x,y)=> 0.6 + (1-y/HORIZON)*2.0 + noise1(x*0.05+y*0.03)*0.3);
+  g.fillStyle='#a9c4dc'; mountainShape(g,268,0.011,0.032,1.7,0.4); g.fill();
+  dotsInTo(g,(gg)=>mountainShape(gg,268,0.011,0.032,1.7,0.4),[-20,180,W+40,160],8.5,'#2a5a8a',(x,y)=> 1.0 + (1-(y-180)/150)*1.2);
+  g.fillStyle='#8fb2cf'; mountainShape(g,296,0.014,0.045,4.1,1.2); g.fill();
+  dotsInTo(g,(gg)=>mountainShape(gg,296,0.014,0.045,4.1,1.2),[-20,210,W+40,130],8,'#1e4a75',()=>1.4);
+  g.fillStyle='#8f9e00'; hillShape(g); g.fill();
+  dotsInTo(g,hillShape,[-20,290,W+40,50],7,'#2f3400',()=>1.35);
+  g.fillStyle='#1c5da1'; g.fillRect(0,HORIZON,W,H-HORIZON);
+  dotsTo(g,0,HORIZON,W,H-HORIZON,8.5,'#062a5a',(x,y)=>{
+    let depth=(y-HORIZON)/(H-HORIZON); return 1.0+depth*1.1;
+  });
+  g.fillStyle='rgba(255,220,120,0.10)';
+  g.beginPath();
+  g.moveTo(SUN_X-26,HORIZON); g.lineTo(SUN_X+26,HORIZON);
+  g.lineTo(SUN_X+70,H); g.lineTo(SUN_X-70,H); g.closePath(); g.fill();
+})();
+
+// ---------- NIGHT BG (calm starry, same geography) ----------
+const bgNight = document.createElement('canvas');
+bgNight.width=W; bgNight.height=H;
+(function buildNight(){
+  const g = bgNight.getContext('2d');
+  g.fillStyle='#141c33'; g.fillRect(0,0,W,HORIZON+2);
+  dotsTo(g,0,0,W,HORIZON,9,'#cdd6f4',(x,y)=> 0.35 + (1-y/HORIZON)*0.9);
+  g.fillStyle='#2a3a5c'; mountainShape(g,268,0.011,0.032,1.7,0.4); g.fill();
+  dotsInTo(g,(gg)=>mountainShape(gg,268,0.011,0.032,1.7,0.4),[-20,180,W+40,160],8.5,'#0d1526',()=>1.2);
+  g.fillStyle='#1f2c4a'; mountainShape(g,296,0.014,0.045,4.1,1.2); g.fill();
+  dotsInTo(g,(gg)=>mountainShape(gg,296,0.014,0.045,4.1,1.2),[-20,210,W+40,130],8,'#0a1220',()=>1.3);
+  g.fillStyle='#111a12'; hillShape(g); g.fill();
+  dotsInTo(g,hillShape,[-20,290,W+40,50],7,'#02040a',()=>1.2);
+  g.fillStyle='#0d2a52'; g.fillRect(0,HORIZON,W,H-HORIZON);
+  dotsTo(g,0,HORIZON,W,H-HORIZON,8.5,'#04122a',(x,y)=>{
+    let depth=(y-HORIZON)/(H-HORIZON); return 0.8+depth*1.0;
+  });
+  g.fillStyle='rgba(220,230,255,0.10)';
+  g.beginPath();
+  g.moveTo(SUN_X-26,HORIZON); g.lineTo(SUN_X+26,HORIZON);
+  g.lineTo(SUN_X+70,H); g.lineTo(SUN_X-70,H); g.closePath(); g.fill();
+})();
+
+// ---------- SUN + MOON SPRITES ----------
+const sunCanvas = document.createElement('canvas');
+sunCanvas.width=sunCanvas.height=240;
+(function buildSun(){
+  const g=sunCanvas.getContext('2d'), C=120, R=50;
+  let glow=g.createRadialGradient(C,C,R*0.5,C,C,R*2.1);
+  glow.addColorStop(0,'rgba(237,192,45,0.35)'); glow.addColorStop(1,'rgba(237,192,45,0)');
+  g.fillStyle=glow; g.beginPath(); g.arc(C,C,R*2.1,0,7); g.fill();
+  g.fillStyle='#e9bd2c'; g.beginPath(); g.arc(C,C,R,0,7); g.fill();
+  dotsInTo(g,(gg)=>{gg.beginPath();gg.arc(C,C,R,0,7);},[C-R,C-R,R*2,R*2],7,'#8a6200',(x,y)=>{
+    let d=Math.hypot(x-C,y-C)/R; return 1.9*(1-d*0.5);
+  });
+})();
+const moonCanvas = document.createElement('canvas');
+moonCanvas.width=moonCanvas.height=200;
+(function buildMoon(){
+  const g=moonCanvas.getContext('2d'), C=100, R=34;
+  let glow=g.createRadialGradient(C,C,R*0.5,C,C,R*2.4);
+  glow.addColorStop(0,'rgba(220,230,255,0.30)'); glow.addColorStop(1,'rgba(220,230,255,0)');
+  g.fillStyle=glow; g.beginPath(); g.arc(C,C,R*2.4,0,7); g.fill();
+  g.fillStyle='#f2ead0'; g.beginPath(); g.arc(C,C,R,0,7); g.fill();
+  dotsInTo(g,(gg)=>{gg.beginPath();gg.arc(C,C,R,0,7);},[C-R,C-R,R*2,R*2],6,'#9a917c',(x,y)=>{
+    let d=Math.hypot(x-C,y-C)/R; return 1.3*(1-d*0.4);
+  });
+})();
+
+// ---------- CLOUD SPRITES (warm-white day -> grey night) ----------
+function makeCloudSprite(s,seed,base,dot,dotR){
+  const w=Math.ceil(s*3.2), h=Math.ceil(s*1.8);
+  const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+  const g=cv.getContext('2d');
+  const cx=w/2, cy=h/2;
+  const blobs=[];
+  for(let k=0;k<7;k++){
+    let a=(k/7)*Math.PI*2+seed;
+    let rr=s*(0.42+0.28*rand(seed*10+k));
+    blobs.push([cx+Math.cos(a)*s*0.85, cy+Math.sin(a)*s*0.28, rr]);
+  }
+  g.fillStyle=base;
+  g.beginPath();
+  for(let b of blobs){ g.moveTo(b[0]+b[2],b[1]); g.arc(b[0],b[1],b[2],0,7); }
+  g.fill();
+  g.save();
+  g.beginPath();
+  for(let b of blobs){ g.moveTo(b[0]+b[2],b[1]); g.arc(b[0],b[1],b[2],0,7); }
+  g.clip();
+  dotsTo(g,0,0,w,h,6.5,dot,()=>dotR);
+  g.restore();
+  return {cv,w,h};
+}
+const cloudDefs=[{x:70,y:108,s:44,seed:1.7},{x:152,y:72,s:32,seed:4.2},{x:252,y:132,s:52,seed:2.6}];
+const cloudDay=cloudDefs.map(c=>makeCloudSprite(c.s,c.seed,'#f5edd2','#c2a94e',0.9));
+const cloudNight=cloudDefs.map(c=>makeCloudSprite(c.s,c.seed,'#5a6274','#2e3440',1.0));
+
+// ---------- STARS ----------
+const stars=[];
+for(let i=0;i<130;i++){
+  stars.push({x:rand(i+2000)*W, y:rand(i+2100)*HORIZON*0.88, r:0.6+rand(i+2200)*1.4, ph:rand(i+2300)*6.28});
+}
+
+// ---------- PRECOMPUTE DYNAMIC SEEDS ----------
+const reeds=[];
+for(let i=0;i<110;i++){
+  reeds.push({rx:rand(i)*W, hgt:34+rand(i+99)*52, ph:rand(i+3)*6.28, tip:rand(i+7)<0.28, tipR:2.4+rand(i)*1.6});
+}
+const sparks=[];
+for(let i=0;i<55;i++){
+  sparks.push({sx:rand(i+500)*W, sy:HORIZON+8+Math.pow(rand(i+700),1.4)*(H-HORIZON-16), len:6+rand(i)*14, ph:i*2.39});
+}
+const lilies=[];
+for(let i=0;i<8;i++){
+  lilies.push({bx:rand(i+900)*W, by:H-28-rand(i+950)*52, w:16+rand(i+920)*26, ph:rand(i)*6.28, notch:rand(i+960)*6.28});
+}
+// keep random pads clear of the hero frog pad so the hop reads cleanly
+for(let l of lilies){
+  if(Math.abs(l.bx-FROG.pad.bx)<62&&Math.abs(l.by-FROG.pad.by)<22) l.bx=((l.bx+(l.bx<FROG.pad.bx?-120:120))%W+W)%W;
+}
+const REED_DAY=[21,21,21], REED_NIGHT=[5,8,15];
+const TIP_DAY=[185,31,31], TIP_NIGHT=[58,17,21];
+const LILY_DAY=[58,107,53], LILY_NIGHT=[12,24,38];
+const LILY_HI=[214,232,190];
+const FROG_BODY_DAY=[74,124,58], FROG_BODY_NIGHT=[16,30,26];
+const FROG_BELLY_DAY=[197,220,170], FROG_BELLY_NIGHT=[40,58,52];
+const FROG_LINE_DAY=[24,40,22], FROG_LINE_NIGHT=[4,10,10];
+const FROG_DOT_DAY=[46,84,38], FROG_DOT_NIGHT=[10,20,18];
+
+function drawBoat(x,y,t,g,nightK){
+  let tiltWave=(waveY(x+12,t)-waveY(x-12,t))/24;
+  let tilt=tiltWave*0.9 + Math.sin(t*0.9)*0.015 + (g-0.5)*0.06;
+  let bob=waveY(x,t);
+  for(let k=0;k<3;k++){
+    let age=(t*0.35+k/3)%1;
+    let ww=18+age*72;
+    ctx.strokeStyle=`rgba(255,255,255,${(1-age)*(0.4+nightK*0.15)})`;
+    ctx.lineWidth=1.5;
+    ctx.beginPath();
+    ctx.ellipse(x-6,y+16+age*7,ww*0.5,3+age*4,0,Math.PI*1.08,Math.PI*1.92);
+    ctx.stroke();
+  }
+  ctx.save();
+  ctx.globalAlpha=0.18;
+  ctx.translate(x,y+22); ctx.scale(1,-0.55);
+  ctx.fillStyle='#f5f1e6';
+  ctx.beginPath();
+  ctx.moveTo(-34,0); ctx.lineTo(34,0); ctx.lineTo(22,20); ctx.lineTo(-22,20); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.translate(x,y+bob); ctx.rotate(tilt);
+  ctx.fillStyle='#f7f2e6'; ctx.strokeStyle=nightK>0.5?'#0a0d16':'#1c1c1c'; ctx.lineWidth=1.8;
+  ctx.beginPath();
+  ctx.moveTo(-36,0); ctx.lineTo(36,0); ctx.lineTo(23,20); ctx.lineTo(-23,20);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='rgba(0,0,0,0.08)';
+  ctx.beginPath();
+  ctx.moveTo(-23,20); ctx.lineTo(23,20); ctx.lineTo(18,14); ctx.lineTo(-18,14); ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-19,0); ctx.lineTo(19,0); ctx.lineTo(0,-36);
+  ctx.closePath(); ctx.fillStyle='#f7f2e6'; ctx.fill(); ctx.stroke();
+  ctx.setLineDash([5,4]);
+  ctx.beginPath(); ctx.moveTo(0,-36); ctx.lineTo(0,20); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// lily pad with real notch + top highlight, optional dip (spring when frog leaves)
+function drawLily(x,y,w,color,dip,notch){
+  y+=dip;
+  let h=w*0.32;
+  ctx.fillStyle=css(color,0.92);
+  ctx.beginPath();
+  ctx.ellipse(x,y,w,h,0,notch,notch+Math.PI*2-0.38);
+  ctx.lineTo(x,y);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='rgba(10,25,12,0.55)';
+  ctx.lineWidth=1.4;
+  ctx.stroke();
+  ctx.strokeStyle='rgba(255,255,255,0.20)';
+  ctx.lineWidth=1.5;
+  ctx.beginPath();
+  ctx.ellipse(x,y-0.6,w*0.86,h*0.8,0,Math.PI*1.12,Math.PI*1.88);
+  ctx.stroke();
+}
+
+// print-style side-view frog, facing right. squash/stretch via sx,sy; blink 0..1 closes eyes.
+function drawFrog(x,y,o){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.rotate(o.rot);
+  ctx.scale(o.sx,o.sy);
+  ctx.globalAlpha=o.alpha;
+  // shadow on pad (only when sitting, not mid-air)
+  if(o.shadow>0.5){
+    ctx.fillStyle='rgba(0,0,0,0.18)';
+    ctx.beginPath(); ctx.ellipse(0,9,13,3.4,0,0,7); ctx.fill();
+  }
+  // folded back leg
+  ctx.strokeStyle=css(o.line,1.6); ctx.lineWidth=3.4; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(-9,2);
+  ctx.quadraticCurveTo(-16,6,-7,8); ctx.stroke();
+  ctx.lineWidth=2.4;
+  ctx.beginPath(); ctx.moveTo(-7,8); ctx.lineTo(-2,8); ctx.stroke();
+  // body
+  ctx.fillStyle=css(o.body);
+  ctx.strokeStyle=css(o.line); ctx.lineWidth=1.8;
+  ctx.beginPath(); ctx.ellipse(0,0,15,10,0,0,7); ctx.fill(); ctx.stroke();
+  // belly
+  ctx.fillStyle=css(o.belly,0.85);
+  ctx.beginPath(); ctx.ellipse(3,4.5,8.5,4.2,0,0,7); ctx.fill();
+  // back dots
+  ctx.fillStyle=css(o.dot);
+  ctx.beginPath(); ctx.arc(-6,-3.5,1.7,0,7); ctx.fill();
+  ctx.beginPath(); ctx.arc(0,-5.5,1.4,0,7); ctx.fill();
+  ctx.beginPath(); ctx.arc(-10,0.5,1.2,0,7); ctx.fill();
+  // head bump
+  ctx.fillStyle=css(o.body);
+  ctx.beginPath(); ctx.arc(9,-6,7.5,0,7); ctx.fill(); ctx.stroke();
+  // front leg (extends back in flight)
+  ctx.strokeStyle=css(o.line); ctx.lineWidth=2.4;
+  ctx.beginPath(); ctx.moveTo(6,6); ctx.lineTo(6+o.legX,6+o.legY); ctx.stroke();
+  // eyes
+  let eh = 4*(0.25+0.75*o.blink);
+  for(let e=0;e<2;e++){
+    let ex=5+e*8, ey=-13.5-Math.abs(e-0.5)*1.2;
+    ctx.fillStyle='#f6f2e2';
+    ctx.beginPath(); ctx.ellipse(ex,ey,3.6,eh,0,0,7); ctx.fill();
+    ctx.strokeStyle=css(o.line); ctx.lineWidth=1.2; ctx.stroke();
+    if(o.blink>0.4){
+      ctx.fillStyle='#141414';
+      ctx.beginPath(); ctx.arc(ex+1.2,ey-0.5,1.7,0,7); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// frog pose for loop-time lt (seconds in LOOP) + wall t for idle life
+function frogPose(lt,t,nightK){
+  let pad=FROG.pad;
+  let px=pad.bx+Math.sin(t*0.15+pad.ph)*4, py=pad.by-6;
+  let breathe=1+Math.sin(t*2.2)*0.03;
+  let blink=(t%3.7)<0.14?0:1;
+  let body=mixc(FROG_BODY_DAY,FROG_BODY_NIGHT,Math.max(nightK,ss(8,12,lt)*0.5));
+  let belly=mixc(FROG_BELLY_DAY,FROG_BELLY_NIGHT,nightK);
+  let line=mixc(FROG_LINE_DAY,FROG_LINE_NIGHT,nightK);
+  let dot=mixc(FROG_DOT_DAY,FROG_DOT_NIGHT,nightK);
+  let base={x:px,y:py,rot:0,sx:breathe,sy:1-(breathe-1),alpha:1,blink,body,belly,line,dot,legX:5,legY:5,crouch:0,padDip:0,shadow:1};
+  if(lt>=FROG.ant0&&lt<FROG.take){ // anticipation crouch
+    let k=(lt-FROG.ant0)/(FROG.take-FROG.ant0);
+    base.sx=1+0.16*k; base.sy=1-0.24*k; base.crouch=k; base.padDip=4*k;
+    base.y=py+3*k; base.blink=1;
+    return {mode:'crouch',...base};
+  }
+  if(lt>=FROG.take&&lt<FROG.land){ // flight
+    let f=(lt-FROG.take)/(FROG.land-FROG.take);
+    let sx0=px, sy0=py, sx1=px+FROG.splashDx, sy1=py+FROG.splashDy;
+    let h=Math.sin(f*Math.PI)*72;
+    base.x=lerp(sx0,sx1,f); base.y=lerp(sy0,sy1,f)-h;
+    let vx=(sx1-sx0), vy=(sy1-sy0)-Math.cos(f*Math.PI)*72*Math.PI/(FROG.land-FROG.take)*0.12;
+    base.rot=Math.atan2(vy,vx)*0.28;
+    base.sx=1.18; base.sy=0.84; base.legX=-7; base.legY=3; base.blink=1; base.shadow=0;
+    base.padDip=-2.5*Math.exp(-3*(lt-FROG.take));
+    return {mode:'fly',...base};
+  }
+  if(lt>=FROG.land&&lt<FROG.back0){ // underwater
+    base.alpha=0; base.padDip=-2.5*Math.exp(-3*(lt-FROG.take));
+    return {mode:'gone',...base};
+  }
+  if(lt>=FROG.back0&&lt<FROG.back1){ // dawn fade-in
+    base.alpha=(lt-FROG.back0)/(FROG.back1-FROG.back0);
+    base.sx*=0.9+0.1*base.alpha; base.sy*=0.9+0.1*base.alpha;
+    return {mode:'back',...base};
+  }
+  return {mode:'sit',...base};
+}
+
+let lastT=performance.now(), fpsEMA=60;
+function loop(now){
+  let t=now/1000;
+  let g=gust(t);
+  let lt=t%LOOP;
+  let nightK=ss(8,12,lt)*(1-ss(18,20,lt));
+  let sunA=Math.min(1,Math.max(0,1-ss(8,11,lt)+ss(18,20,lt)));
+  let moonA=ss(9.5,12.5,lt)*(1-ss(18,20,lt));
+  let dt=now-lastT; lastT=now;
+  if(dt>0&&dt<250) fpsEMA=fpsEMA*0.95+(1000/dt)*0.05;
+
+  let br=1+Math.sin(t*0.4)*0.008;
+  cvs.style.transform=`scale(${br})`;
+
+  ctx.clearRect(0,0,W,H);
+  ctx.drawImage(bgCanvas,0,0);
+  ctx.globalAlpha=nightK;
+  ctx.drawImage(bgNight,0,0);
+  ctx.globalAlpha=1;
+
+  if(nightK>0.02){
+    for(let s of stars){
+      let tw=0.5+0.5*Math.sin(t*2+s.ph);
+      ctx.globalAlpha=nightK*(0.25+0.75*tw);
+      ctx.fillStyle='#e8eeff';
+      ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,7); ctx.fill();
+    }
+    ctx.globalAlpha=1;
+  }
+
+  if(sunA>0.02){
+    ctx.globalAlpha=sunA;
+    let pr=1+Math.sin(t*0.8)*0.024;
+    let ssz=240*pr;
+    ctx.drawImage(sunCanvas,SUN_X-ssz/2,SUN_Y-ssz/2,ssz,ssz);
+    ctx.globalAlpha=1;
+  }
+  if(moonA>0.02){
+    ctx.globalAlpha=moonA;
+    let pr=1+Math.sin(t*0.6)*0.02;
+    let msz=200*pr;
+    ctx.drawImage(moonCanvas,SUN_X-msz/2,SUN_Y-msz/2,msz,msz);
+    ctx.globalAlpha=1;
+  }
+
+  for(let i=0;i<3;i++){
+    let c=cloudDefs[i];
+    let cx=c.x+Math.sin(t*0.12+c.seed)*10+g*14;
+    let cy=c.y+Math.sin(t*0.2+c.seed*2)*3;
+    let d=cloudDay[i], n=cloudNight[i];
+    ctx.globalAlpha=1; ctx.drawImage(d.cv,cx-d.w/2,cy-d.h/2);
+    ctx.globalAlpha=nightK; ctx.drawImage(n.cv,cx-n.w/2,cy-n.h/2);
+    ctx.globalAlpha=1;
+  }
+
+  let bt=t%16, bx=-60+(bt/16)*660;
+  if(bt>4&&bt<12&&nightK<0.4){
+    let by=118+Math.sin(bt*1.2)*8;
+    let fade=Math.min(1,(bt-4))*Math.min(1,(12-bt))*(1-nightK);
+    ctx.globalAlpha=0.75*fade;
+    ctx.strokeStyle='#222'; ctx.lineWidth=1.6;
+    for(let b=0;b<2;b++){
+      let ox=b*18-9, flap=Math.sin(t*7+b)*4;
+      ctx.beginPath();
+      ctx.moveTo(bx+ox-7,by-flap*0.4); ctx.quadraticCurveTo(bx+ox,by+2,bx+ox+7,by-flap*0.4);
+      ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  }
+
+  ctx.lineWidth=1.6;
+  let reedC=mixc(REED_DAY,REED_NIGHT,nightK), tipC=mixc(TIP_DAY,TIP_NIGHT,nightK);
+  for(let r of reeds){
+    let base=hillTopX(r.rx)+6;
+    let lean=(g*16-6)+Math.sin(t*1.4+r.ph)*2.2;
+    let topX=r.rx+lean, topY=base-r.hgt+g*4;
+    ctx.strokeStyle=css(reedC);
+    ctx.beginPath(); ctx.moveTo(r.rx,base);
+    ctx.quadraticCurveTo(r.rx+lean*0.4,base-r.hgt*0.6,topX,topY); ctx.stroke();
+    if(r.tip){
+      ctx.fillStyle=css(tipC);
+      ctx.beginPath(); ctx.arc(topX,topY,r.tipR,0,7); ctx.fill();
+    }
+  }
+
+  ctx.strokeStyle=nightK>0.5?'#dbe6ff':'#fff'; ctx.lineWidth=1.8;
+  for(let s of sparks){
+    let farK=1-(s.sy-HORIZON)/(H-HORIZON);
+    let slide=Math.sin(t*(0.6+farK*0.5)+s.ph)*10+g*8;
+    let len=s.len*(1.3-farK*0.6);
+    let tw=0.5+0.5*Math.sin(t*2.2+s.ph);
+    ctx.globalAlpha=(0.18+0.55*tw)*(1-farK*0.3)*(1+nightK*0.3);
+    ctx.beginPath(); ctx.moveTo(s.sx+slide,s.sy); ctx.lineTo(s.sx+slide+len,s.sy); ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+
+  let boatX=W/2+Math.sin(t*0.28)*10+g*6;
+  drawBoat(boatX,HORIZON+34,t,g,nightK);
+
+  // lilies with notch + highlight
+  let lilyC=mixc(LILY_DAY,LILY_NIGHT,nightK);
+  let pose=frogPose(lt,t,nightK);
+  for(let l of lilies){
+    let lx=l.bx+Math.sin(t*0.15+l.ph)*6;
+    drawLily(lx,l.by,l.w,lilyC,0,l.notch);
+  }
+  // hero frog pad (dips with crouch / rebound after takeoff)
+  let pad=FROG.pad;
+  let padX=pad.bx+Math.sin(t*0.15+pad.ph)*4;
+  drawLily(padX,pad.by,pad.w,lilyC,pose.padDip,pad.notch);
+
+  // frog
+  if(pose.alpha>0.02) drawFrog(pose.x,pose.y-4,pose);
+
+  // splash ripples + droplets after landing
+  if(lt>=FROG.land&&lt<FROG.ripEnd){
+    let spx=padX+FROG.splashDx, spy=pad.by+FROG.splashDy;
+    for(let k=0;k<3;k++){
+      let age=(lt-FROG.land-k*0.28)/1.9;
+      if(age<0||age>1) continue;
+      ctx.strokeStyle=`rgba(255,255,255,${(1-age)*0.55})`;
+      ctx.lineWidth=1.6;
+      ctx.beginPath();
+      ctx.ellipse(spx,spy,8+age*48,3+age*10,0,0,7);
+      ctx.stroke();
+    }
+    let ddt=lt-FROG.land;
+    if(ddt<0.7){
+      for(let d of DROPS){
+        let dx=spx+d.vx*ddt, dy=spy+d.vy*ddt+230*ddt*ddt;
+        if(dy>spy+4) continue;
+        ctx.globalAlpha=1-ddt/0.7;
+        ctx.fillStyle='#eaf4ff';
+        ctx.beginPath(); ctx.arc(dx,dy,d.r,0,7); ctx.fill();
+      }
+      ctx.globalAlpha=1;
+    }
+  }
+
+  if((loop.frame++&15)===0){
+    let phase=lt<8?'day':lt<8.6?'day':lt<9.95?'dusk · hop':lt<12?'dusk':lt<18?'night':'dawn';
+    fpsEl.textContent=fpsEMA.toFixed(0)+' fps · '+phase;
+  }
+  requestAnimationFrame(loop);
+}
+loop.frame=0;
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
