@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Halftone Boat - Beautiful Pass (60fps fix)</title>
+<title>Halftone Boat - Day to Night (60fps)</title>
 <style>
   body { background:#111; display:flex; flex-direction:column; align-items:center; margin:0; padding:20px; color:#888; font:12px monospace; }
   canvas { border:1px solid #333; background:#f2ede0; will-change:transform; }
@@ -17,6 +17,7 @@ const cvs = document.getElementById('c');
 const ctx = cvs.getContext('2d');
 const W = 540, H = 540;
 const HORIZON = 332;
+const LOOP = 20; // day 0-8, dusk 8-12, night 12-18, return 18-20
 const fpsEl = document.getElementById('fps');
 
 function rand(i){ let v = Math.sin(i*127.1+311.7)*43758.5453; return v-Math.floor(v); }
@@ -25,6 +26,11 @@ function gust(t){
   let slow = 0.5 + 0.5*Math.sin(t*0.39 + Math.sin(t*0.13)*1.2);
   return slow*slow*(3-2*slow);
 }
+function ss(a,b,x){ let k=Math.min(1,Math.max(0,(x-a)/(b-a))); return k*k*(3-2*k); }
+function lerp(a,b,k){ return a+(b-a)*k; }
+function mixc(c1,c2,k){ return [lerp(c1[0],c2[0],k)|0, lerp(c1[1],c2[1],k)|0, lerp(c1[2],c2[2],k)|0]; }
+function css(c,a){ return a===undefined? `rgb(${c[0]},${c[1]},${c[2]})` : `rgba(${c[0]},${c[1]},${c[2]},${a})`; }
+// frog hook (parked): FROG = {lily: 2, t0: -1}; hop runs 3s parabola + ripples. Added later.
 
 // generic dots into any context (used once for statics, not per-frame)
 function dotsTo(g,x,y,w,h,gap,color,radiusFn){
@@ -52,7 +58,6 @@ function ridgeY(x, base, a1,a2, p1,p2){
 function hillTopX(x){ return 310 + Math.sin(x*0.02+0.8)*6 + noise1(x*0.03)*5; }
 function waveY(x,t){ return Math.sin(x*0.045 + t*1.1)*3 + Math.sin(x*0.11 - t*0.7)*1.6; }
 
-// ---------- PRE-RENDER STATICS (once, not per frame) ----------
 function mountainShape(g,base,a1,a2,p1,p2){
   g.beginPath();
   g.moveTo(-20,HORIZON+2);
@@ -67,34 +72,53 @@ function hillShape(g){
 
 const SUN_X=420, SUN_Y=88, SUN_R=50;
 
+// ---------- DAY BG ----------
 const bgCanvas = document.createElement('canvas');
 bgCanvas.width=W; bgCanvas.height=H;
 (function buildBG(){
   const g = bgCanvas.getContext('2d');
-  // sky
   g.fillStyle='#f0ebdd'; g.fillRect(0,0,W,HORIZON+2);
   dotsTo(g,0,0,W,HORIZON,9,'#2a5a8a',(x,y)=> 0.6 + (1-y/HORIZON)*2.0 + noise1(x*0.05+y*0.03)*0.3);
-  // mountains far + near
   g.fillStyle='#a9c4dc'; mountainShape(g,268,0.011,0.032,1.7,0.4); g.fill();
   dotsInTo(g,(gg)=>mountainShape(gg,268,0.011,0.032,1.7,0.4),[-20,180,W+40,160],8.5,'#2a5a8a',(x,y)=> 1.0 + (1-(y-180)/150)*1.2);
   g.fillStyle='#8fb2cf'; mountainShape(g,296,0.014,0.045,4.1,1.2); g.fill();
   dotsInTo(g,(gg)=>mountainShape(gg,296,0.014,0.045,4.1,1.2),[-20,210,W+40,130],8,'#1e4a75',()=>1.4);
-  // hill
   g.fillStyle='#8f9e00'; hillShape(g); g.fill();
   dotsInTo(g,hillShape,[-20,290,W+40,50],7,'#2f3400',()=>1.35);
-  // lake base
   g.fillStyle='#1c5da1'; g.fillRect(0,HORIZON,W,H-HORIZON);
   dotsTo(g,0,HORIZON,W,H-HORIZON,8.5,'#062a5a',(x,y)=>{
     let depth=(y-HORIZON)/(H-HORIZON); return 1.0+depth*1.1;
   });
-  // sun glitter path (static - sun doesn't drift)
   g.fillStyle='rgba(255,220,120,0.10)';
   g.beginPath();
   g.moveTo(SUN_X-26,HORIZON); g.lineTo(SUN_X+26,HORIZON);
   g.lineTo(SUN_X+70,H); g.lineTo(SUN_X-70,H); g.closePath(); g.fill();
 })();
 
-// ---------- SUN SPRITE (glow + disc + dots, drawn once) ----------
+// ---------- NIGHT BG (calm starry, same geography) ----------
+const bgNight = document.createElement('canvas');
+bgNight.width=W; bgNight.height=H;
+(function buildNight(){
+  const g = bgNight.getContext('2d');
+  g.fillStyle='#141c33'; g.fillRect(0,0,W,HORIZON+2);
+  dotsTo(g,0,0,W,HORIZON,9,'#cdd6f4',(x,y)=> 0.35 + (1-y/HORIZON)*0.9);
+  g.fillStyle='#2a3a5c'; mountainShape(g,268,0.011,0.032,1.7,0.4); g.fill();
+  dotsInTo(g,(gg)=>mountainShape(gg,268,0.011,0.032,1.7,0.4),[-20,180,W+40,160],8.5,'#0d1526',()=>1.2);
+  g.fillStyle='#1f2c4a'; mountainShape(g,296,0.014,0.045,4.1,1.2); g.fill();
+  dotsInTo(g,(gg)=>mountainShape(gg,296,0.014,0.045,4.1,1.2),[-20,210,W+40,130],8,'#0a1220',()=>1.3);
+  g.fillStyle='#111a12'; hillShape(g); g.fill();
+  dotsInTo(g,hillShape,[-20,290,W+40,50],7,'#02040a',()=>1.2);
+  g.fillStyle='#0d2a52'; g.fillRect(0,HORIZON,W,H-HORIZON);
+  dotsTo(g,0,HORIZON,W,H-HORIZON,8.5,'#04122a',(x,y)=>{
+    let depth=(y-HORIZON)/(H-HORIZON); return 0.8+depth*1.0;
+  });
+  g.fillStyle='rgba(220,230,255,0.10)'; // moon glitter path, same shape
+  g.beginPath();
+  g.moveTo(SUN_X-26,HORIZON); g.lineTo(SUN_X+26,HORIZON);
+  g.lineTo(SUN_X+70,H); g.lineTo(SUN_X-70,H); g.closePath(); g.fill();
+})();
+
+// ---------- SUN + MOON SPRITES ----------
 const sunCanvas = document.createElement('canvas');
 sunCanvas.width=sunCanvas.height=240;
 (function buildSun(){
@@ -107,10 +131,21 @@ sunCanvas.width=sunCanvas.height=240;
     let d=Math.hypot(x-C,y-C)/R; return 1.9*(1-d*0.5);
   });
 })();
+const moonCanvas = document.createElement('canvas');
+moonCanvas.width=moonCanvas.height=200;
+(function buildMoon(){
+  const g=moonCanvas.getContext('2d'), C=100, R=34;
+  let glow=g.createRadialGradient(C,C,R*0.5,C,C,R*2.4);
+  glow.addColorStop(0,'rgba(220,230,255,0.30)'); glow.addColorStop(1,'rgba(220,230,255,0)');
+  g.fillStyle=glow; g.beginPath(); g.arc(C,C,R*2.4,0,7); g.fill();
+  g.fillStyle='#f2ead0'; g.beginPath(); g.arc(C,C,R,0,7); g.fill();
+  dotsInTo(g,(gg)=>{gg.beginPath();gg.arc(C,C,R,0,7);},[C-R,C-R,R*2,R*2],6,'#9a917c',(x,y)=>{
+    let d=Math.hypot(x-C,y-C)/R; return 1.3*(1-d*0.4);
+  });
+})();
 
-// ---------- CLOUD SPRITES (creamy, pre-rendered) ----------
-const CLOUD_BASE='#f0d67c', CLOUD_DOT='#a68a1a';
-function makeCloudSprite(s,seed){
+// ---------- CLOUD SPRITES (warm-white day -> grey night) ----------
+function makeCloudSprite(s,seed,base,dot,dotR){
   const w=Math.ceil(s*3.2), h=Math.ceil(s*1.8);
   const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
   const g=cv.getContext('2d');
@@ -121,7 +156,7 @@ function makeCloudSprite(s,seed){
     let rr=s*(0.42+0.28*rand(seed*10+k));
     blobs.push([cx+Math.cos(a)*s*0.85, cy+Math.sin(a)*s*0.28, rr]);
   }
-  g.fillStyle=CLOUD_BASE;
+  g.fillStyle=base;
   g.beginPath();
   for(let b of blobs){ g.moveTo(b[0]+b[2],b[1]); g.arc(b[0],b[1],b[2],0,7); }
   g.fill();
@@ -129,12 +164,19 @@ function makeCloudSprite(s,seed){
   g.beginPath();
   for(let b of blobs){ g.moveTo(b[0]+b[2],b[1]); g.arc(b[0],b[1],b[2],0,7); }
   g.clip();
-  dotsTo(g,0,0,w,h,6.5,CLOUD_DOT,()=>1.0);
+  dotsTo(g,0,0,w,h,6.5,dot,()=>dotR);
   g.restore();
   return {cv,w,h};
 }
 const cloudDefs=[{x:70,y:108,s:44,seed:1.7},{x:152,y:72,s:32,seed:4.2},{x:252,y:132,s:52,seed:2.6}];
-const cloudSprites=cloudDefs.map(c=>makeCloudSprite(c.s,c.seed));
+const cloudDay=cloudDefs.map(c=>makeCloudSprite(c.s,c.seed,'#f5edd2','#c2a94e',0.9));
+const cloudNight=cloudDefs.map(c=>makeCloudSprite(c.s,c.seed,'#5a6274','#2e3440',1.0));
+
+// ---------- STARS (sky only, precomputed) ----------
+const stars=[];
+for(let i=0;i<130;i++){
+  stars.push({x:rand(i+2000)*W, y:rand(i+2100)*HORIZON*0.88, r:0.6+rand(i+2200)*1.4, ph:rand(i+2300)*6.28});
+}
 
 // ---------- PRECOMPUTE DYNAMIC SEEDS ----------
 const reeds=[];
@@ -142,22 +184,25 @@ for(let i=0;i<110;i++){
   reeds.push({rx:rand(i)*W, hgt:34+rand(i+99)*52, ph:rand(i+3)*6.28, tip:rand(i+7)<0.28, tipR:2.4+rand(i)*1.6});
 }
 const sparks=[];
-for(let i=0;i<55;i++){ // 85 -> 55, same look, 35% cheaper
+for(let i=0;i<55;i++){
   sparks.push({sx:rand(i+500)*W, sy:HORIZON+8+Math.pow(rand(i+700),1.4)*(H-HORIZON-16), len:6+rand(i)*14, ph:i*2.39});
 }
 const lilies=[];
 for(let i=0;i<8;i++){
   lilies.push({bx:rand(i+900)*W, by:H-28-rand(i+950)*52, w:16+rand(i+920)*26, ph:rand(i)*6.28});
 }
+const REED_DAY=[21,21,21], REED_NIGHT=[5,8,15];
+const TIP_DAY=[185,31,31], TIP_NIGHT=[58,17,21];
+const LILY_DAY=[58,107,53], LILY_NIGHT=[12,24,38];
 
-function drawBoat(x,y,t,g){
+function drawBoat(x,y,t,g,nightK){
   let tiltWave=(waveY(x+12,t)-waveY(x-12,t))/24;
   let tilt=tiltWave*0.9 + Math.sin(t*0.9)*0.015 + (g-0.5)*0.06;
   let bob=waveY(x,t);
   for(let k=0;k<3;k++){
     let age=(t*0.35+k/3)%1;
     let ww=18+age*72;
-    ctx.strokeStyle=`rgba(255,255,255,${(1-age)*0.4})`;
+    ctx.strokeStyle=`rgba(255,255,255,${(1-age)*(0.4+nightK*0.15)})`;
     ctx.lineWidth=1.5;
     ctx.beginPath();
     ctx.ellipse(x-6,y+16+age*7,ww*0.5,3+age*4,0,Math.PI*1.08,Math.PI*1.92);
@@ -172,7 +217,7 @@ function drawBoat(x,y,t,g){
   ctx.restore();
   ctx.save();
   ctx.translate(x,y+bob); ctx.rotate(tilt);
-  ctx.fillStyle='#f7f2e6'; ctx.strokeStyle='#1c1c1c'; ctx.lineWidth=1.8;
+  ctx.fillStyle='#f7f2e6'; ctx.strokeStyle=nightK>0.5?'#0a0d16':'#1c1c1c'; ctx.lineWidth=1.8;
   ctx.beginPath();
   ctx.moveTo(-36,0); ctx.lineTo(36,0); ctx.lineTo(23,20); ctx.lineTo(-23,20);
   ctx.closePath(); ctx.fill(); ctx.stroke();
@@ -192,35 +237,65 @@ let lastT=performance.now(), fpsEMA=60;
 function loop(now){
   let t=now/1000;
   let g=gust(t);
-  // fps
+  let lt=t%LOOP;
+  let nightK=ss(8,12,lt)*(1-ss(18,20,lt));
+  let sunA=Math.min(1,Math.max(0,1-ss(8,11,lt)+ss(18,20,lt)));
+  let moonA=ss(9.5,12.5,lt)*(1-ss(18,20,lt));
   let dt=now-lastT; lastT=now;
   if(dt>0&&dt<250) fpsEMA=fpsEMA*0.95+(1000/dt)*0.05;
 
-  // camera breath via cheap CSS transform (GPU), not ctx.scale
   let br=1+Math.sin(t*0.4)*0.008;
   cvs.style.transform=`scale(${br})`;
 
   ctx.clearRect(0,0,W,H);
   ctx.drawImage(bgCanvas,0,0);
+  ctx.globalAlpha=nightK;
+  ctx.drawImage(bgNight,0,0);
+  ctx.globalAlpha=1;
 
-  // sun sprite with breathing pulse (no per-frame dots/gradient)
-  let pr=1+Math.sin(t*0.8)*0.024;
-  let ss=240*pr;
-  ctx.drawImage(sunCanvas,SUN_X-ss/2,SUN_Y-ss/2,ss,ss);
-
-  // clouds (sprites, drift + wind push)
-  for(let i=0;i<3;i++){
-    let c=cloudDefs[i], sp=cloudSprites[i];
-    let cx=c.x+Math.sin(t*0.12+c.seed)*10+g*14;
-    let cy=c.y+Math.sin(t*0.2+c.seed*2)*3;
-    ctx.drawImage(sp.cv,cx-sp.w/2,cy-sp.h/2);
+  // stars (night only, twinkle)
+  if(nightK>0.02){
+    for(let s of stars){
+      let tw=0.5+0.5*Math.sin(t*2+s.ph);
+      ctx.globalAlpha=nightK*(0.25+0.75*tw);
+      ctx.fillStyle='#e8eeff';
+      ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,7); ctx.fill();
+    }
+    ctx.globalAlpha=1;
   }
 
-  // birds
-  let loopT=t%16, bx=-60+(loopT/16)*660;
-  if(loopT>4&&loopT<12){
-    let by=118+Math.sin(loopT*1.2)*8;
-    let fade=Math.min(1,(loopT-4))*Math.min(1,(12-loopT));
+  // sun fades, moon takes same spot
+  if(sunA>0.02){
+    ctx.globalAlpha=sunA;
+    let pr=1+Math.sin(t*0.8)*0.024;
+    let ssz=240*pr;
+    ctx.drawImage(sunCanvas,SUN_X-ssz/2,SUN_Y-ssz/2,ssz,ssz);
+    ctx.globalAlpha=1;
+  }
+  if(moonA>0.02){
+    ctx.globalAlpha=moonA;
+    let pr=1+Math.sin(t*0.6)*0.02;
+    let msz=200*pr;
+    ctx.drawImage(moonCanvas,SUN_X-msz/2,SUN_Y-msz/2,msz,msz);
+    ctx.globalAlpha=1;
+  }
+
+  // clouds: warm-white day -> grey night crossfade
+  for(let i=0;i<3;i++){
+    let c=cloudDefs[i];
+    let cx=c.x+Math.sin(t*0.12+c.seed)*10+g*14;
+    let cy=c.y+Math.sin(t*0.2+c.seed*2)*3;
+    let d=cloudDay[i], n=cloudNight[i];
+    ctx.globalAlpha=1; ctx.drawImage(d.cv,cx-d.w/2,cy-d.h/2);
+    ctx.globalAlpha=nightK; ctx.drawImage(n.cv,cx-n.w/2,cy-n.h/2);
+    ctx.globalAlpha=1;
+  }
+
+  // birds (day only)
+  let bt=t%16, bx=-60+(bt/16)*660;
+  if(bt>4&&bt<12&&nightK<0.4){
+    let by=118+Math.sin(bt*1.2)*8;
+    let fade=Math.min(1,(bt-4))*Math.min(1,(12-bt))*(1-nightK);
     ctx.globalAlpha=0.75*fade;
     ctx.strokeStyle='#222'; ctx.lineWidth=1.6;
     for(let b=0;b<2;b++){
@@ -232,43 +307,49 @@ function loop(now){
     ctx.globalAlpha=1;
   }
 
-  // reeds (precomputed bases, coherent wind)
+  // reeds (lerp to silhouette, tips dim)
   ctx.lineWidth=1.6;
+  let reedC=mixc(REED_DAY,REED_NIGHT,nightK), tipC=mixc(TIP_DAY,TIP_NIGHT,nightK);
   for(let r of reeds){
     let base=hillTopX(r.rx)+6;
     let lean=(g*16-6)+Math.sin(t*1.4+r.ph)*2.2;
     let topX=r.rx+lean, topY=base-r.hgt+g*4;
-    ctx.strokeStyle='#151515';
+    ctx.strokeStyle=css(reedC);
     ctx.beginPath(); ctx.moveTo(r.rx,base);
     ctx.quadraticCurveTo(r.rx+lean*0.4,base-r.hgt*0.6,topX,topY); ctx.stroke();
     if(r.tip){
-      ctx.fillStyle='#b91f1f';
+      ctx.fillStyle=css(tipC);
       ctx.beginPath(); ctx.arc(topX,topY,r.tipR,0,7); ctx.fill();
     }
   }
 
-  // sparkles (batched white, twinkle)
-  ctx.strokeStyle='#fff'; ctx.lineWidth=1.8;
+  // sparkles (moon-cool boost at night)
+  ctx.strokeStyle=nightK>0.5?'#dbe6ff':'#fff'; ctx.lineWidth=1.8;
   for(let s of sparks){
     let farK=1-(s.sy-HORIZON)/(H-HORIZON);
     let slide=Math.sin(t*(0.6+farK*0.5)+s.ph)*10+g*8;
     let len=s.len*(1.3-farK*0.6);
     let tw=0.5+0.5*Math.sin(t*2.2+s.ph);
-    ctx.globalAlpha=(0.18+0.55*tw)*(1-farK*0.3);
+    ctx.globalAlpha=(0.18+0.55*tw)*(1-farK*0.3)*(1+nightK*0.3);
     ctx.beginPath(); ctx.moveTo(s.sx+slide,s.sy); ctx.lineTo(s.sx+slide+len,s.sy); ctx.stroke();
   }
   ctx.globalAlpha=1;
 
   let boatX=W/2+Math.sin(t*0.28)*10+g*6;
-  drawBoat(boatX,HORIZON+34,t,g);
+  drawBoat(boatX,HORIZON+34,t,g,nightK);
 
+  // lilies: green day -> dark night
+  let lilyC=mixc(LILY_DAY,LILY_NIGHT,nightK);
   for(let l of lilies){
     let lx=l.bx+Math.sin(t*0.15+l.ph)*6;
-    ctx.fillStyle='rgba(6,30,60,0.85)';
+    ctx.fillStyle=css(lilyC,0.92);
     ctx.beginPath(); ctx.ellipse(lx,l.by,l.w,l.w*0.32,0,0,7); ctx.fill();
   }
 
-  if((loop.frame++&15)===0) fpsEl.textContent=fpsEMA.toFixed(0)+' fps';
+  if((loop.frame++&15)===0){
+    let phase=lt<8?'day':lt<12?'dusk':lt<18?'night':'dawn';
+    fpsEl.textContent=fpsEMA.toFixed(0)+' fps · '+phase;
+  }
   requestAnimationFrame(loop);
 }
 loop.frame=0;
