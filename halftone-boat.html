@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Halftone Boat - Step 2 after Stickman</title>
+<style>
+  body { background:#111; display:flex; justify-content:center; margin:0; padding:20px; }
+  canvas { border:1px solid #333; }
+</style>
+</head>
+<body>
+<canvas id="c" width="480" height="720"></canvas>
+<script>
+// SAME setup as stickman.html
+const cvs = document.getElementById('c');
+const ctx = cvs.getContext('2d');
+const W = 480, H = 720;
+const HORIZON = 420; // sky 0-420, lake 420-720
+
+// Helper: draw a grid of dots inside a rectangle.
+// This is the whole "halftone" trick from your frames.
+function dots(x, y, w, h, gap, color, radiusFn) {
+  ctx.fillStyle = color;
+  let row = 0;
+  for (let yy = y; yy < y + h; yy += gap) {
+    row++;
+    for (let xx = x; xx < x + w; xx += gap) {
+      // offset every other row -> classic print look
+      let ox = (row % 2 === 0) ? gap / 2 : 0;
+      let r = radiusFn(xx, yy);
+      if (r <= 0.2) continue;
+      ctx.beginPath();
+      ctx.arc(xx + ox, yy, r, 0, 7);
+      ctx.fill();
+    }
+  }
+}
+
+// Helper: same dots, but clipped inside any shape (sun, mountain, lake)
+function dotsIn(shapeFn, bounds, gap, color, radiusFn) {
+  ctx.save();
+  shapeFn();   // builds a path
+  ctx.clip();  // everything after only draws inside it
+  dots(bounds[0], bounds[1], bounds[2], bounds[3], gap, color, radiusFn);
+  ctx.restore();
+}
+
+function sunPath(x, y, r) {
+  return () => { ctx.beginPath(); ctx.arc(x, y, r, 0, 7); };
+}
+
+// Seeded random so sparkles don't jump around (same every frame)
+function rand(i) {
+  let v = Math.sin(i * 127.1) * 43758.5;
+  return v - Math.floor(v);
+}
+
+function drawBoat(x, y, t) {
+  let bob = Math.sin(t * 2) * 5;
+  let tilt = Math.sin(t * 1.5) * 0.04;
+  ctx.save();
+  ctx.translate(x, y + bob);
+  ctx.rotate(tilt);
+  // hull
+  ctx.fillStyle = '#f5f1e6';
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-42, 0); ctx.lineTo(42, 0);
+  ctx.lineTo(28, 24); ctx.lineTo(-28, 24);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // sail triangle
+  ctx.beginPath();
+  ctx.moveTo(-22, 0); ctx.lineTo(22, 0); ctx.lineTo(0, -42);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // fold line (like in your frame5.png)
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath(); ctx.moveTo(0, -42); ctx.lineTo(0, 24); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function loop(now) {
+  let t = now / 1000; // seconds, like stickman's `now` but in seconds
+  ctx.clearRect(0, 0, W, H); // 1. wipe, same as stickman
+
+  // --- SKY base ---
+  ctx.fillStyle = '#f2ede0';
+  ctx.fillRect(0, 0, W, HORIZON);
+  // sky dots: small dark-blue dots, bigger near top
+  dots(0, 0, W, HORIZON, 10, '#2a5a8a', (x, y) => 1 + (1 - y / HORIZON) * 1.6);
+
+  // --- SUN (solid + dots) ---
+  let sunX = 360 - t * 8 % 200; // slow drift left, like frame6 -> frame7
+  let sunY = 120;
+  ctx.fillStyle = '#ffcc33';
+  ctx.beginPath(); ctx.arc(sunX, sunY, 58, 0, 7); ctx.fill();
+  dotsIn(sunPath(sunX, sunY, 58), [sunX-60, sunY-60, 120, 120],
+    8, '#c78a00', () => 1.8);
+
+  // --- CLOUDS: flat blobs drifting ---
+  ctx.fillStyle = '#ffdd55';
+  for (let i = 0; i < 3; i++) {
+    let cx = ((i * 200 + t * 12) % 600) - 60;
+    let cy = 180 + i * 45;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 62, 18, 0, 0, 7);
+    ctx.fill();
+  }
+
+  // --- MOUNTAINS ---
+  let mtn = () => {
+    ctx.beginPath();
+    ctx.moveTo(0, HORIZON);
+    ctx.lineTo(120, 300); ctx.lineTo(260, HORIZON - 20);
+    ctx.lineTo(360, 310); ctx.lineTo(W, HORIZON - 40);
+    ctx.lineTo(W, HORIZON); ctx.closePath();
+  };
+  ctx.fillStyle = '#9dbdd6';
+  mtn(); ctx.fill();
+  dotsIn(mtn, [0, 280, W, 150], 9, '#2a5a8a', () => 1.7);
+
+  // --- HILL + REEDS ---
+  ctx.fillStyle = '#b8b400';
+  ctx.fillRect(0, HORIZON - 70, W, 70);
+  dots(0, HORIZON - 70, W, 70, 8, '#3a3a00', () => 1.4);
+  // reeds: vertical lines swaying with sin, like stickman legs
+  ctx.strokeStyle = '#111';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 40; i++) {
+    let rx = rand(i) * W;
+    let hgt = 30 + rand(i + 99) * 50;
+    let sway = Math.sin(t * 1.8 + i) * 4; // same sin idea as swing
+    ctx.beginPath();
+    ctx.moveTo(rx, HORIZON);
+    ctx.lineTo(rx + sway, HORIZON - hgt);
+    ctx.stroke();
+  }
+
+  // --- LAKE ---
+  ctx.fillStyle = '#1360a8';
+  ctx.fillRect(0, HORIZON, W, H - HORIZON);
+  dots(0, HORIZON, W, H - HORIZON, 9, '#062a5a', () => 1.6);
+
+  // sparkles: white dashes moving with sin
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 70; i++) {
+    let sx = rand(i + 500) * W;
+    let sy = HORIZON + 10 + rand(i + 700) * (H - HORIZON - 20);
+    let slide = Math.sin(t * 2 + i) * 12;
+    let len = 8 + rand(i) * 18;
+    ctx.globalAlpha = 0.25 + rand(i + 33) * 0.55;
+    ctx.beginPath();
+    ctx.moveTo(sx + slide, sy);
+    ctx.lineTo(sx + slide + len, sy);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // --- BOAT (center, like your frames) ---
+  drawBoat(W / 2, HORIZON + 50, t);
+
+  requestAnimationFrame(loop); // 2. next frame, same as stickman
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

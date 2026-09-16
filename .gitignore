@@ -1,0 +1,6 @@
+# Large media - not pushed. Re-extract og_frames on new device (see work-history.md Section 3).
+*.mp4
+*.png
+*.jpg
+*.jpeg
+og_frames/
